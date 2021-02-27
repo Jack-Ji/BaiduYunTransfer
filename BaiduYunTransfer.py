@@ -1,34 +1,39 @@
-import requests, re, urllib, os, time
+#!/usr/bin/python3
 
+import requests, re, urllib, os, time
 
 class BaiduYunTransfer:
 
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/83.0.4103.116 Safari/537.36',
             'Referer': 'pan.baidu.com'}
-    
+
     universal_error_code = {'2': '参数错误。检查必填字段；get/post 参数位置',
-                            '-6': '身份验证失败。access_token 是否有效；部分接口需要申请对应的网盘权限',
-                            '31034': '命中接口频控。核对频控规则;稍后再试;申请单独频控规则',
-                            '42000': '访问过于频繁',
-                            '42001': 'rand校验失败',
-                            '42999': '功能下线',
-                            '9100': '一级封禁',
-                            '9200': '二级封禁',
-                            '9300': '三级封禁',
-                            '9400': '四级封禁',
-                            '9500': '五级封禁'}
+            '-6': '身份验证失败。access_token 是否有效；部分接口需要申请对应的网盘权限',
+            '31034': '命中接口频控。核对频控规则;稍后再试;申请单独频控规则',
+            '42000': '访问过于频繁',
+            '42001': 'rand校验失败',
+            '42999': '功能下线',
+            '9100': '一级封禁',
+            '9200': '二级封禁',
+            '9300': '三级封禁',
+            '9400': '四级封禁',
+            '9500': '五级封禁'}
 
 
-    def __init__(self, api_key, secret_key, share_link, password, dir):
+    def __init__(self, api_key, secret_key):
         self.api_key = api_key
         self.secret_key = secret_key
+        if not self.init_token():
+            raise Exception("init token failed")
+
+    def start_transfer(self, share_link, password, dir):
         self.share_link = share_link
         self.password = password
         self.dir = dir
-
-        if self.init_token() and self.get_surl() and self.get_sekey() and self.get_shareid_and_uk_and_fsidlist():
-            self.file_transfer()
-
+        if self.get_surl() and self.get_sekey() and self.get_shareid_and_uk_and_fsidlist():
+            return self.file_transfer()
+        else:
+            return False
 
     def apply_for_token(self):
         '''
@@ -56,7 +61,7 @@ class BaiduYunTransfer:
         grant_type          固定值，值为'authorization_code'
         code                上一步得到的授权码
         client_id           应用的API KEY
-        client_secret   	应用的SECRET KEY
+        client_secret       应用的SECRET KEY
         redirect_uri        和上一步的redirect_uri相同
         '''
         get_token_url = 'https://openapi.baidu.com/oauth/2.0/token?grant_type=authorization_code'
@@ -78,7 +83,7 @@ class BaiduYunTransfer:
             self.refresh_token = res_json['refresh_token']
             return True
 
-    
+
     def reflush_token(self):
         '''
         使用refresh_token，刷新token。
@@ -113,8 +118,7 @@ class BaiduYunTransfer:
         access_token的有效期是一个月，refresh_token的有效期是十年，access_token过期后，使用refresh_token刷新token即可
         '''
         conf = r'BaiduYunTransfer.conf'
-        
-        
+
         if os.path.exists(conf):                               # 存在配置文件
             with open(conf, 'r')as f:
                 token = f.read()
@@ -163,22 +167,14 @@ class BaiduYunTransfer:
         res = re.search(r'https://pan\.baidu\.com/share/init\?surl=([0-9a-zA-Z].+?)$', self.share_link)
         if res:
             print('long_link:', self.share_link)
-
+ 
             self.surl = res.group(1)
             print('surl:', self.surl)
             return True
         else:
             print('short_link:', self.share_link)
-
-            res = requests.get(self.share_link, headers = self.headers)
-            reditList = res.history
-            if reditList == []:                 #当分享不存在时，不会输入验证码，而是直接显示链接不存在。
-                print('链接不存在：此链接分享内容可能因为涉及侵权、色情、反动、低俗等信息，无法访问！') 
-                return False
-            link = reditList[len(reditList)-1].headers["location"]      # 302跳转的最后一跳的url
-            print('long_link:', link)
-
-            res = re.search(r'https://pan\.baidu\.com/share/init\?surl=([0-9a-zA-Z].+?)$', link)
+ 
+            res = re.search(r'https://pan\.baidu\.com/s/([0-9a-zA-Z].+?)$', self.share_link)
             if res:
                 self.surl = res.group(1)
                 print('surl:', self.surl)
@@ -193,11 +189,16 @@ class BaiduYunTransfer:
         验证提取码是否正确，如果正确，得到一个与提取码有关的密钥串randsk(即后面获取文件目录信息和转存文件时需要用到的sekey)
         详情参见：https://pan.baidu.com/union/document/openLink#%E9%99%84%E4%BB%B6%E5%AF%86%E7%A0%81%E9%AA%8C%E8%AF%81
         '''
+
+        if len(self.password) == 0:
+            self.sekey = ''
+            return True
+
         url = 'https://pan.baidu.com/rest/2.0/xpan/share?method=verify'
         params = {'surl': self.surl}
         data = {'pwd': self.password}
         res = requests.post(url, headers = self.headers, params = params, data = data)
-        
+
         res_json = res.json()
         errno = res_json['errno']
         if errno == 0:
@@ -216,10 +217,10 @@ class BaiduYunTransfer:
                 print('获取sekey失败，错误码：{}，错误：{}'.format(errno, error[str(errno)]))
             else:
                 print('获取sekey失败，错误码：{}，错误未知，请尝试查询https://pan.baidu.com/union/document/error#%E9%94%99%E8%AF%AF%E7%A0%81%E5%88%97%E8%A1%A8'.format(errno))
-            
+
             return False
 
-            # 提取码不是4位的时候，返回的errno是-12，含义是非会员用户达到转存文件数目上限，这是百度网盘的后端代码逻辑不正确，我也没办法。不过你闲的没事输入长度不是4位的提取码干嘛？
+        # 提取码不是4位的时候，返回的errno是-12，含义是非会员用户达到转存文件数目上限，这是百度网盘的后端代码逻辑不正确，我也没办法。不过你闲的没事输入长度不是4位的提取码干嘛？
 
 
     def get_shareid_and_uk_and_fsidlist(self):
@@ -237,38 +238,57 @@ class BaiduYunTransfer:
         fid                 文件夹ID，表示显示文件夹下的所有文件
         sekey               附件链接密钥串，对应verify接口返回的randsk
         '''
-        url = 'https://pan.baidu.com/rest/2.0/xpan/share?method=list'
-        params = {"shorturl": self.surl, "page":"1", "num":"100", "root":"1", "fid":"0", "sekey":self.sekey}
+
+        # 获取shareid, uk
+        url = 'https://pan.baidu.com/api/shorturlinfo'
+        params = {"shorturl": self.surl}
         res = requests.get(url, headers=self.headers, params=params)
         res_json = res.json()
-        
+        shareid = res_json['shareid']
+        if shareid != None and shareid > 0:
+            self.shareid = shareid
+            print('shareid:', self.shareid)
+ 
+            self.uk = res_json['uk']
+            print('uk:', self.uk)
+        else:
+            error = {'110': '有其他转存任务在进行',
+                    '105': '非会员用户达到转存文件数目上限',
+                    '-7': '达到高级会员转存上限'}
+            error.update(self.universal_error_code)
+ 
+            if str(errno) in error:
+                print('获取shareid, uk失败，错误码：{}，错误：{}'.format(errno, error[str(errno)]))
+            else:
+                print('获取shareid, uk失败，错误码：{}，错误未知，请尝试查询https://pan.baidu.com/union/document/error#%E9%94%99%E8%AF%AF%E7%A0%81%E5%88%97%E8%A1%A8'.format(errno))
+ 
+            return False
+
+        # 获取fsid
+        url = 'https://pan.baidu.com/rest/2.0/xpan/share?method=list'
+        params = {"shareid": self.shareid, "uk": self.uk, "page":"1", "num":"100", "root":"1", "fid":"0", "sekey":self.sekey}
+        res = requests.get(url, headers=self.headers, params=params)
         res_json = res.json()
         errno = res_json['errno']
         if errno == 0:
-            self.shareid = res_json['share_id']
-            print('shareid:', self.shareid)
-            
-            self.uk = res_json['uk']
-            print('uk:', self.uk)
-            
             fsidlist = res_json['list']
             self.fsid_list = []
             for fs in fsidlist:
                 self.fsid_list.append(int(fs['fs_id']))
             print('fsidlist:', self.fsid_list)
-
+ 
             return True
         else:
             error = {'110': '有其他转存任务在进行',
                     '105': '非会员用户达到转存文件数目上限',
                     '-7': '达到高级会员转存上限'}
             error.update(self.universal_error_code)
-
+ 
             if str(errno) in error:
-                print('获取shareid, uk, fsidlist失败，错误码：{}，错误：{}'.format(errno, error[str(errno)]))
+                print('获取fsidlist失败，错误码：{}，错误：{}'.format(errno, error[str(errno)]))
             else:
-                print('获取shareid, uk, fsidlist失败，错误码：{}，错误未知，请尝试查询https://pan.baidu.com/union/document/error#%E9%94%99%E8%AF%AF%E7%A0%81%E5%88%97%E8%A1%A8'.format(errno))
-
+                print('获取fsidlist失败，错误码：{}，错误未知，请尝试查询https://pan.baidu.com/union/document/error#%E9%94%99%E8%AF%AF%E7%A0%81%E5%88%97%E8%A1%A8'.format(errno))
+ 
             return False
 
     def file_transfer(self):
@@ -321,8 +341,24 @@ class BaiduYunTransfer:
 if __name__ == '__main__':
     api_key = 'GHkLa9AeMAwHK16C5suBKlk3'                                            # 按照https://pan.baidu.com/union/document/entrance#%E7%AE%80%E4%BB%8B 的指引，申请api_key和secret_key。
     secret_key = '2ZRL3CXd6ocjtSwwAnX9ryYf4l85RYGm'                                 # 这里默认是我申请的api_key和secret_key，仅作测试使用。出于安全和QPS的考量，我推荐你去申请自己的api_key和secret_key。
-    share_link = 'https://pan.baidu.com/s/1vzuR_X744zYJKnDHlm7vNA'                  # 分享链接
+    password = ''                                                                   # 分享提取码
+    dir = '/转存'                                                                   # 转存路径，根路径为/，记得提前在百度网盘内创建好目标转存目录
+    #share_link = 'https://pan.baidu.com/s/1LGDt_UQfdyQ9ga04bsnLKg'                 # 分享链接
     #share_link = 'https://pan.baidu.com/share/init?surl=9PsW5sWFLdbR7eHZbnHelw'    # 分享链接，以上两种形式的链接都可以
-    password = 'nvt5'                                                               # 分享提取码
-    dir = '/转存测试'                                                               # 转存路径，根路径为/
-    BaiduYunTransfer(api_key, secret_key, share_link, password, dir)
+
+    trs = BaiduYunTransfer(api_key, secret_key)
+
+    processed = list(open('transferred.txt'))
+    fp = open('transferred.txt', 'a')
+    share_links = open('download_urls.txt')
+    for link in share_links:
+        print('>>> 处理分享链接', link.strip(), end=' ...... ')
+        if link in processed:
+            print('已处理')
+            continue
+        print()
+        if not trs.start_transfer(link.strip(), password, dir):
+            print('处理失败')
+            break
+        fp.write(link)
+        fp.flush()
